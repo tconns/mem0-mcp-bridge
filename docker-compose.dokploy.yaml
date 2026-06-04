@@ -1,0 +1,37 @@
+# MCP bridge → Mem0 Server (deploy/mem0-dokploy)
+# Dokploy: Compose path = docker-compose.dokploy.yaml (root của repo/folder này)
+# Domain → service mem0-mcp-bridge, port 8080, path /mcp
+
+name: mem0-mcp-bridge
+
+services:
+  mem0-mcp-bridge:
+    build: ./app
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      MEM0_API_URL: ${MEM0_API_URL}
+      MEM0_API_KEY: ${MEM0_API_KEY}
+      MEM0_DEFAULT_USER_ID: ${MEM0_DEFAULT_USER_ID:-team-shared}
+      MEM0_DEFAULT_ORG: ${MEM0_DEFAULT_ORG:-multica}
+      MEM0_DEFAULT_PRODUCT: ${MEM0_DEFAULT_PRODUCT:-multica}
+      MEM0_DEFAULT_PROJECT: ${MEM0_DEFAULT_PROJECT:-ai-agentic}
+      MEM0_MAX_MEMORY_CHARS: ${MEM0_MAX_MEMORY_CHARS:-1500}
+      MEM0_MIN_IMPORTANCE_TO_SAVE: ${MEM0_MIN_IMPORTANCE_TO_SAVE:-3}
+      MEM0_DEDUP_SEARCH_TOP_K: ${MEM0_DEDUP_SEARCH_TOP_K:-5}
+      MCP_PROJECT_TOKENS: ${MCP_PROJECT_TOKENS}
+      MCP_ALLOW_UNAUTHENTICATED: ${MCP_ALLOW_UNAUTHENTICATED:-false}
+      MCP_ALLOW_CROSS_SCOPE_DELETE: ${MCP_ALLOW_CROSS_SCOPE_DELETE:-false}
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: "8080"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python -c \"import os,httpx; u=os.environ['MEM0_API_URL'].rstrip('/'); h={}; k=os.environ.get('MEM0_API_KEY',''); h.update({'X-API-Key':k}) if k else None; httpx.get(u+'/auth/setup-status', headers=h, timeout=10).raise_for_status()\"",
+        ]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 20s
