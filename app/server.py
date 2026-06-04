@@ -13,7 +13,8 @@ from typing import Any, Literal
 
 import httpx
 from fastmcp import FastMCP
-from fastmcp.server.dependencies import get_http_headers
+from fastmcp.server.auth.providers.jwt import StaticTokenVerifier
+from fastmcp.server.dependencies import get_access_token
 
 MEM0_API_URL = os.environ.get("MEM0_API_URL", "http://mem0:8000").rstrip("/")
 MEM0_API_KEY = os.environ.get("MEM0_API_KEY", "")
@@ -71,6 +72,20 @@ def _parse_project_tokens(raw: str) -> dict[str, ProjectAuth]:
 
 
 PROJECT_TOKENS = _parse_project_tokens(MCP_PROJECT_TOKENS)
+TOKEN_VERIFIER = StaticTokenVerifier(
+    tokens={
+        token: {
+            "client_id": f"{context['org']}:{context['product']}:{context['project']}",
+            "scopes": ["memory:read", "memory:write"],
+            "org": context["org"],
+            "product": context["product"],
+            "project": context["project"],
+            "repo": context["repo"],
+        }
+        for token, context in PROJECT_TOKENS.items()
+    },
+    required_scopes=["memory:read"],
+)
 
 mcp = FastMCP(
     "mem0-shared",
@@ -81,6 +96,7 @@ mcp = FastMCP(
         "search_context, get_project_brief, summarize_handoff. "
         "Store durable distilled facts only; never store raw chat history or long logs."
     ),
+    auth=None if MCP_ALLOW_UNAUTHENTICATED else TOKEN_VERIFIER,
 )
 
 
@@ -102,33 +118,24 @@ def _clean(value: str | None) -> str | None:
     return cleaned or None
 
 
-def _request_bearer_token() -> str | None:
-    headers = get_http_headers()
-    auth = headers.get("authorization") or headers.get("Authorization") or ""
-    if not auth.lower().startswith("bearer "):
-        return None
-    token = auth[7:].strip()
-    return token or None
-
-
 def _auth_context() -> ProjectAuth:
-    if not PROJECT_TOKENS:
-        if MCP_ALLOW_UNAUTHENTICATED:
-            return {
-                "org": DEFAULT_ORG,
-                "product": DEFAULT_PRODUCT,
-                "project": DEFAULT_PROJECT,
-                "repo": None,
-            }
-        raise PermissionError("MCP_PROJECT_TOKENS is required; unauthenticated MCP access is disabled.")
-
-    token = _request_bearer_token()
-    if not token:
-        raise PermissionError("Missing Authorization: Bearer <project-token>.")
-    context = PROJECT_TOKENS.get(token)
-    if not context:
-        raise PermissionError("Invalid MCP project token.")
-    return context
+    if MCP_ALLOW_UNAUTHENTICATED:
+        return {
+            "org": DEFAULT_ORG,
+            "product": DEFAULT_PRODUCT,
+            "project": DEFAULT_PROJECT,
+            "repo": None,
+        }
+    token = get_access_token()
+    if token is None:
+        raise PermissionError("Missing authenticated MCP access token.")
+    claims = token.claims or {}
+    return {
+        "org": str(claims.get("org") or DEFAULT_ORG),
+        "product": str(claims.get("product") or DEFAULT_PRODUCT),
+        "project": str(claims.get("project") or DEFAULT_PROJECT),
+        "repo": claims.get("repo"),
+    }
 
 
 def _enforced_scope(
